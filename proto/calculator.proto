@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package calculatorpb;
+
+option go_package = "gen/calculatorpb";   
+
+service CalcService {
+  rpc Compute (ComputeRequest) returns (ComputeResponse);
+}
+
+message ComputeRequest {
+  double area = 1;
+  double normative_rate = 2;
+  int32 layers = 3;
+  double slope_angle = 4;
+  double loss_factor = 5;
+}
+
+message ComputeResponse {
+  double total_mass = 1;
+  double total_volume = 2;
+}
