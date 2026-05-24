@@ -8,8 +8,6 @@ import (
 	pb "github.com/MatveySotnikov/fireprotect/gen/calculatorpb"
 )
 
-const density = 1.2
-
 type CalcServiceServer struct {
 	pb.UnimplementedCalcServiceServer
 }
@@ -24,6 +22,11 @@ func (s *CalcServiceServer) Compute(ctx context.Context, req *pb.ComputeRequest)
 	// Проверка входных данных
 	if area <= 0 || normRate <= 0 || layers <= 0 || slopeAngle < 0 || slopeAngle >= 90 || lossFactor < 0 {
 		return nil, fmt.Errorf("invalid input parameters")
+	}
+
+	density := req.GetDensity()
+	if density <= 0 {
+		density = 1.2
 	}
 
 	// Коэффициент наклона: k1 = 1 / cos(угол в радианах)

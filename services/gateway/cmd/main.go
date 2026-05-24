@@ -180,15 +180,7 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Сохранение в БД
 	calc := db.Calculation{
-		UserID:        claims.UserID,
-		Area:          req.Area,
-		NormativeRate: req.NormativeRate,
-		Layers:        req.Layers,
-		SlopeAngle:    req.SlopeAngle,
-		LossFactor:    req.LossFactor,
-		Density:       1.2, // используется в Calculator, временно константа
-		TotalMass:     resp.GetTotalMass(),
-		TotalVolume:   resp.GetTotalVolume(),
+		// TODO: будет переделано в шаге 7.5.2
 	}
 	if err := db.DB.Create(&calc).Error; err != nil {
 		log.Printf("Failed to save calculation: %v", err)
@@ -256,17 +248,7 @@ func calculationsHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		data := pdf.ActData{
-			UserName:      calc.User.Name,
-			UserEmail:     calc.User.Email,
-			Area:          calc.Area,
-			NormativeRate: calc.NormativeRate,
-			Layers:        calc.Layers,
-			SlopeAngle:    calc.SlopeAngle,
-			LossFactor:    calc.LossFactor,
-			Density:       calc.Density,
-			TotalMass:     calc.TotalMass,
-			TotalVolume:   calc.TotalVolume,
-			CalcDate:      calc.CreatedAt,
+			// TODO: будет переделано в шаге 7.5.2
 		}
 		pdfBytes, err := pdf.GenerateAct(data)
 		if err != nil {
@@ -297,64 +279,6 @@ func calculationsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.Error(w, "Not found", http.StatusNotFound)
-}
-
-func calcDownloadHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	claims, ok := auth.GetUserFromContext(r.Context())
-	if !ok {
-		http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		return
-	}
-
-	// Извлекаем ID из пути: /calculations/{id}/download
-	path := strings.TrimPrefix(r.URL.Path, "/calculations/")
-	parts := strings.Split(path, "/")
-	if len(parts) < 2 || parts[1] != "download" {
-		http.Error(w, "Invalid path", http.StatusBadRequest)
-		return
-	}
-	id, err := strconv.Atoi(parts[0])
-	if err != nil {
-		http.Error(w, "Invalid calculation ID", http.StatusBadRequest)
-		return
-	}
-
-	// Загружаем расчёт вместе с пользователем
-	var calc db.Calculation
-	if result := db.DB.Preload("User").Where("id = ? AND user_id = ?", id, claims.UserID).First(&calc); result.Error != nil {
-		http.Error(w, "Calculation not found", http.StatusNotFound)
-		return
-	}
-
-	data := pdf.ActData{
-		UserName:      calc.User.Name,
-		UserEmail:     calc.User.Email,
-		Area:          calc.Area,
-		NormativeRate: calc.NormativeRate,
-		Layers:        calc.Layers,
-		SlopeAngle:    calc.SlopeAngle,
-		LossFactor:    calc.LossFactor,
-		Density:       calc.Density,
-		TotalMass:     calc.TotalMass,
-		TotalVolume:   calc.TotalVolume,
-		CalcDate:      calc.CreatedAt,
-	}
-
-	pdfBytes, err := pdf.GenerateAct(data)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("PDF generation error: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/pdf")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=act_%d.pdf", calc.ID))
-	w.WriteHeader(http.StatusOK)
-	w.Write(pdfBytes)
 }
 
 func main() {

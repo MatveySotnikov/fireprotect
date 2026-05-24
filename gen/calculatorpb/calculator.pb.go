@@ -7,12 +7,11 @@
 package calculatorpb
 
 import (
+	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
+	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
-
-	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
-	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 )
 
 const (
@@ -29,6 +28,7 @@ type ComputeRequest struct {
 	Layers        int32                  `protobuf:"varint,3,opt,name=layers,proto3" json:"layers,omitempty"`
 	SlopeAngle    float64                `protobuf:"fixed64,4,opt,name=slope_angle,json=slopeAngle,proto3" json:"slope_angle,omitempty"`
 	LossFactor    float64                `protobuf:"fixed64,5,opt,name=loss_factor,json=lossFactor,proto3" json:"loss_factor,omitempty"`
+	Density       float64                `protobuf:"fixed64,6,opt,name=density,proto3" json:"density,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -98,6 +98,13 @@ func (x *ComputeRequest) GetLossFactor() float64 {
 	return 0
 }
 
+func (x *ComputeRequest) GetDensity() float64 {
+	if x != nil {
+		return x.Density
+	}
+	return 0
+}
+
 type ComputeResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	TotalMass     float64                `protobuf:"fixed64,1,opt,name=total_mass,json=totalMass,proto3" json:"total_mass,omitempty"`
@@ -154,7 +161,7 @@ var File_proto_calculator_proto protoreflect.FileDescriptor
 
 const file_proto_calculator_proto_rawDesc = "" +
 	"\n" +
-	"\x16proto/calculator.proto\x12\fcalculatorpb\"\xa5\x01\n" +
+	"\x16proto/calculator.proto\x12\fcalculatorpb\"\xbf\x01\n" +
 	"\x0eComputeRequest\x12\x12\n" +
 	"\x04area\x18\x01 \x01(\x01R\x04area\x12%\n" +
 	"\x0enormative_rate\x18\x02 \x01(\x01R\rnormativeRate\x12\x16\n" +
@@ -162,7 +169,8 @@ const file_proto_calculator_proto_rawDesc = "" +
 	"\vslope_angle\x18\x04 \x01(\x01R\n" +
 	"slopeAngle\x12\x1f\n" +
 	"\vloss_factor\x18\x05 \x01(\x01R\n" +
-	"lossFactor\"S\n" +
+	"lossFactor\x12\x18\n" +
+	"\adensity\x18\x06 \x01(\x01R\adensity\"S\n" +
 	"\x0fComputeResponse\x12\x1d\n" +
 	"\n" +
 	"total_mass\x18\x01 \x01(\x01R\ttotalMass\x12!\n" +

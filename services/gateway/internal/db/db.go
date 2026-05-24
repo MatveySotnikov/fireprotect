@@ -30,11 +30,56 @@ func Init() error {
 	}
 
 	// Автоматическое создание/обновление таблиц
-	if err := DB.AutoMigrate(&User{}, &Calculation{}); err != nil {
+	if err := DB.AutoMigrate(&User{}, &Material{}, &Calculation{}); err != nil {
 		return fmt.Errorf("auto migration failed: %w", err)
 	}
 
+	// Заполнение справочника материалов (если пусто)
+	seedMaterials()
+
 	return nil
+}
+
+func seedMaterials() {
+	var count int64
+	DB.Model(&Material{}).Count(&count)
+	if count > 0 {
+		return
+	}
+
+	materials := []Material{
+		{
+			Title:             "Огнебиощит Эксперт (дерево)",
+			DefaultDensity:    1.10,
+			Group1Consumption: 0.500,
+			Group2Consumption: 0.300,
+			BrushLoss:         1.05,
+			SprayIndoorLoss:   1.20,
+			SprayOutdoorLoss:  1.35,
+		},
+		{
+			Title:             "Терма-Металл (металл)",
+			DefaultDensity:    1.35,
+			Group1Consumption: 1.250, // для R45
+			Group2Consumption: 0.0,   // не используется
+			BrushLoss:         1.10,
+			SprayIndoorLoss:   1.25,
+			SprayOutdoorLoss:  1.40,
+		},
+		{
+			Title:             "Универсальный состав (пример)",
+			DefaultDensity:    1.20,
+			Group1Consumption: 0.600,
+			Group2Consumption: 0.400,
+			BrushLoss:         1.05,
+			SprayIndoorLoss:   1.20,
+			SprayOutdoorLoss:  1.30,
+		},
+	}
+
+	for _, m := range materials {
+		DB.Create(&m)
+	}
 }
 
 func getEnv(key, fallback string) string {
