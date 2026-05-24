@@ -9,7 +9,7 @@ import (
 	"github.com/jung-kurt/gofpdf"
 )
 
-//go:embed times.ttf
+//go:embed TIMES.TTF
 var timesFont []byte
 
 type ActData struct {

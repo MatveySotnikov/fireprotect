@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"os"
 
 	pb "github.com/MatveySotnikov/fireprotect/gen/calculatorpb"
 	"google.golang.org/grpc"
@@ -27,11 +28,17 @@ func Init() {
 		}]
 	}`
 
+	addr := os.Getenv("CALCULATOR_ADDR")
+	if addr == "" {
+		addr = "localhost:50051"
+	}
+
 	conn, err := grpc.NewClient(
-		"localhost:50051",
+		addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithDefaultServiceConfig(serviceConfig),
 	)
+
 	if err != nil {
 		log.Fatalf("Failed to connect to gRPC calculator: %v", err)
 	}
