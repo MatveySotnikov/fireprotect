@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -13,24 +14,29 @@ import (
 	pb "github.com/MatveySotnikov/fireprotect/gen/calculatorpb"
 	"github.com/MatveySotnikov/fireprotect/services/gateway/internal/auth"
 	"github.com/MatveySotnikov/fireprotect/services/gateway/internal/db"
+	"github.com/MatveySotnikov/fireprotect/services/gateway/internal/pdf"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/joho/godotenv"
-
-	"github.com/MatveySotnikov/fireprotect/services/gateway/internal/pdf"
 )
 
 var grpcClient pb.CalcServiceClient
 
 // ---------- Request / Response structs ----------
+
+// Новый формат запроса на расчёт
 type calcRequest struct {
-	Area          float64 `json:"area"`
-	NormativeRate float64 `json:"normative_rate"`
-	Layers        int32   `json:"layers"`
-	SlopeAngle    float64 `json:"slope_angle"`
-	LossFactor    float64 `json:"loss_factor"`
+	Area              float64 `json:"area"`
+	AreaType          string  `json:"area_type"` // "projection" или "slope"
+	SlopeAngle        float64 `json:"slope_angle"`
+	TargetGroup       string  `json:"target_group"`          // "1_group" или "2_group"
+	ApplicationMethod string  `json:"application_method"`    // "brush", "spray_indoor", "spray_outdoor"
+	MaterialID        *uint   `json:"material_id,omitempty"` // указатель, может быть null
+	// Поля для ручного ввода, если material_id не указан
+	NormativeRate *float64 `json:"normative_rate,omitempty"`
+	Density       *float64 `json:"density,omitempty"`
 }
 
 type calcResponse struct {
@@ -60,6 +66,37 @@ func init() {
 		log.Fatalf("Failed to connect to gRPC calculator: %v", err)
 	}
 	grpcClient = pb.NewCalcServiceClient(conn)
+}
+
+// ---------- Вспомогательные функции ----------
+
+// computeMassVolume вычисляет массу и объём по исходным данным (без учёта площади)
+func computeMassVolume(area, slopeAngle float64, areaType string, usedNormativeRate, usedDensity float64) (float64, float64, error) {
+	if area <= 0 {
+		return 0, 0, fmt.Errorf("площадь должна быть положительной")
+	}
+	// Определяем эффективную площадь с учётом типа
+	var effectiveArea float64
+	switch areaType {
+	case "projection":
+		if slopeAngle < 0 || slopeAngle >= 90 {
+			return 0, 0, fmt.Errorf("некорректный угол уклона")
+		}
+		angleRad := slopeAngle * math.Pi / 180.0
+		cosA := math.Cos(angleRad)
+		if cosA == 0 {
+			return 0, 0, fmt.Errorf("cos(slope_angle) равен нулю")
+		}
+		effectiveArea = area / cosA
+	case "slope":
+		effectiveArea = area
+	default:
+		return 0, 0, fmt.Errorf("неизвестный тип площади: %s", areaType)
+	}
+
+	totalMass := effectiveArea * usedNormativeRate
+	totalVolume := totalMass / usedDensity
+	return totalMass, totalVolume, nil
 }
 
 // ---------- Обработчики ----------
@@ -161,15 +198,70 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
+	// Определяем расход и плотность
+	var usedNormativeRate, usedDensity float64
+	var materialID *uint
+	var lossFactor float64 // разница (например, 0.2 для spray_indoor)
+
+	if req.MaterialID != nil {
+		var mat db.Material
+		if err := db.DB.First(&mat, *req.MaterialID).Error; err != nil {
+			http.Error(w, "Material not found", http.StatusBadRequest)
+			return
+		}
+
+		var baseConsumption float64
+		switch req.TargetGroup {
+		case "1_group":
+			baseConsumption = mat.Group1Consumption
+		case "2_group":
+			baseConsumption = mat.Group2Consumption
+		default:
+			http.Error(w, "Invalid target_group, must be '1_group' or '2_group'", http.StatusBadRequest)
+			return
+		}
+
+		switch req.ApplicationMethod {
+		case "brush":
+			lossFactor = mat.BrushLoss - 1.0
+		case "spray_indoor":
+			lossFactor = mat.SprayIndoorLoss - 1.0
+		case "spray_outdoor":
+			lossFactor = mat.SprayOutdoorLoss - 1.0
+		default:
+			http.Error(w, "Invalid application_method", http.StatusBadRequest)
+			return
+		}
+
+		usedNormativeRate = baseConsumption * (1 + lossFactor)
+		usedDensity = mat.DefaultDensity
+		materialID = req.MaterialID
+	} else {
+		if req.NormativeRate == nil || req.Density == nil {
+			http.Error(w, "Either material_id or both normative_rate and density must be provided", http.StatusBadRequest)
+			return
+		}
+		usedNormativeRate = *req.NormativeRate
+		usedDensity = *req.Density
+		materialID = nil
+		lossFactor = 0
+	}
+
+	if req.Area <= 0 || usedNormativeRate <= 0 || usedDensity <= 0 {
+		http.Error(w, "Invalid input values", http.StatusBadRequest)
+		return
+	}
+
 	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 	defer cancel()
 
 	grpcReq := &pb.ComputeRequest{
 		Area:          req.Area,
-		NormativeRate: req.NormativeRate,
-		Layers:        req.Layers,
+		NormativeRate: usedNormativeRate,
+		Layers:        1,
 		SlopeAngle:    req.SlopeAngle,
-		LossFactor:    req.LossFactor,
+		LossFactor:    0,
+		Density:       usedDensity,
 	}
 
 	resp, err := grpcClient.Compute(ctx, grpcReq)
@@ -179,9 +271,22 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Сохранение в БД
+	lossMultiplier := 1.0 + lossFactor
+
 	calc := db.Calculation{
-		// TODO: будет переделано в шаге 7.5.2
+		UserID:            claims.UserID,
+		MaterialID:        materialID,
+		Area:              req.Area,
+		AreaType:          req.AreaType,
+		SlopeAngle:        req.SlopeAngle,
+		TargetGroup:       req.TargetGroup,
+		ApplicationMethod: req.ApplicationMethod,
+		LossFactor:        lossMultiplier,
+		Layers:            1,
+		UsedNormativeRate: usedNormativeRate,
+		UsedDensity:       usedDensity,
 	}
+
 	if err := db.DB.Create(&calc).Error; err != nil {
 		log.Printf("Failed to save calculation: %v", err)
 	} else {
@@ -215,9 +320,26 @@ func calculationsHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var calcs []db.Calculation
-		db.DB.Where("user_id = ?", claims.UserID).Order("created_at desc").Find(&calcs)
+		db.DB.Preload("User").Preload("Material").Where("user_id = ?", claims.UserID).Order("created_at desc").Find(&calcs)
+
+		// Обогащаем каждую запись вычисленными массой и объёмом
+		type calcEnriched struct {
+			db.Calculation
+			TotalMass   float64 `json:"total_mass"`
+			TotalVolume float64 `json:"total_volume"`
+		}
+		result := make([]calcEnriched, len(calcs))
+		for i, c := range calcs {
+			mass, vol, err := computeMassVolume(c.Area, c.SlopeAngle, c.AreaType, c.UsedNormativeRate, c.UsedDensity)
+			if err != nil {
+				log.Printf("Error computing mass/volume for calc %d: %v", c.ID, err)
+				mass, vol = 0, 0
+			}
+			result[i] = calcEnriched{c, mass, vol}
+		}
+
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(calcs)
+		json.NewEncoder(w).Encode(result)
 		return
 	}
 
@@ -241,14 +363,30 @@ func calculationsHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		// Загружаем расчёт с пользователем
 		var calc db.Calculation
 		if result := db.DB.Preload("User").Where("id = ? AND user_id = ?", id, claims.UserID).First(&calc); result.Error != nil {
 			http.Error(w, "Calculation not found", http.StatusNotFound)
 			return
 		}
+
+		mass, vol, err := computeMassVolume(calc.Area, calc.SlopeAngle, calc.AreaType, calc.UsedNormativeRate, calc.UsedDensity)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to compute result: %v", err), http.StatusInternalServerError)
+			return
+		}
+
 		data := pdf.ActData{
-			// TODO: будет переделано в шаге 7.5.2
+			UserName:      calc.User.Name,
+			UserEmail:     calc.User.Email,
+			Area:          calc.Area,
+			NormativeRate: calc.UsedNormativeRate,
+			Layers:        calc.Layers,
+			SlopeAngle:    calc.SlopeAngle,
+			LossFactor:    calc.LossFactor,
+			Density:       calc.UsedDensity,
+			TotalMass:     mass,
+			TotalVolume:   vol,
+			CalcDate:      calc.CreatedAt,
 		}
 		pdfBytes, err := pdf.GenerateAct(data)
 		if err != nil {
@@ -269,16 +407,41 @@ func calculationsHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		var calc db.Calculation
-		if result := db.DB.Where("id = ? AND user_id = ?", id, claims.UserID).First(&calc); result.Error != nil {
+		if result := db.DB.Preload("User").Preload("Material").Where("id = ? AND user_id = ?", id, claims.UserID).First(&calc); result.Error != nil {
 			http.Error(w, "Calculation not found", http.StatusNotFound)
 			return
 		}
+
+		mass, vol, err := computeMassVolume(calc.Area, calc.SlopeAngle, calc.AreaType, calc.UsedNormativeRate, calc.UsedDensity)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to compute result: %v", err), http.StatusInternalServerError)
+			return
+		}
+
+		type calcDetail struct {
+			db.Calculation
+			TotalMass   float64 `json:"total_mass"`
+			TotalVolume float64 `json:"total_volume"`
+		}
+
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(calc)
+		json.NewEncoder(w).Encode(calcDetail{calc, mass, vol})
 		return
 	}
 
 	http.Error(w, "Not found", http.StatusNotFound)
+}
+
+// Обработчик справочника материалов
+func materialsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var materials []db.Material
+	db.DB.Find(&materials)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(materials)
 }
 
 func main() {
@@ -296,6 +459,7 @@ func main() {
 	http.HandleFunc("/auth/login", loginHandler)
 	http.HandleFunc("/calc", auth.AuthMiddleware(calcHandler))
 	http.HandleFunc("/calculations/", auth.AuthMiddleware(calculationsHandler))
+	http.HandleFunc("/materials", materialsHandler) // общедоступный
 	log.Println("Gateway HTTP server listening on :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
