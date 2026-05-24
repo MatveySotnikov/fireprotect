@@ -24,6 +24,7 @@ func main() {
 	log.Println("Database connected and migrated")
 
 	grpcclient.Init()
+	grpcclient.InitPdfClient()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/auth/register", handler.Register)

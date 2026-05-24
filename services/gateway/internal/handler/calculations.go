@@ -7,12 +7,13 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
+	pb "github.com/MatveySotnikov/fireprotect/gen/pdfpb"
 	"github.com/MatveySotnikov/fireprotect/services/gateway/internal/auth"
 	"github.com/MatveySotnikov/fireprotect/services/gateway/internal/db"
 	"github.com/MatveySotnikov/fireprotect/services/gateway/internal/grpcclient"
 	"github.com/MatveySotnikov/fireprotect/services/gateway/internal/model"
-	"github.com/MatveySotnikov/fireprotect/services/gateway/internal/pdf"
 )
 
 func Calculations(w http.ResponseWriter, r *http.Request) {
@@ -100,7 +101,7 @@ func Calculations(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		data := pdf.ActData{
+		pdfReq := &pb.PdfRequest{
 			UserName:      calc.User.Name,
 			UserEmail:     calc.User.Email,
 			Area:          calc.Area,
@@ -111,9 +112,10 @@ func Calculations(w http.ResponseWriter, r *http.Request) {
 			Density:       calc.UsedDensity,
 			TotalMass:     mass,
 			TotalVolume:   vol,
-			CalcDate:      calc.CreatedAt,
+			CalcDate:      calc.CreatedAt.Format(time.RFC3339),
 		}
-		pdfBytes, err := pdf.GenerateAct(data)
+
+		pdfBytes, err := grpcclient.GenerateAct(r.Context(), pdfReq)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("PDF generation error: %v", err), http.StatusInternalServerError)
 			return

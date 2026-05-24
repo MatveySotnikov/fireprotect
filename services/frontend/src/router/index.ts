@@ -39,16 +39,15 @@ const router = createRouter({
   ],
 });
 
-router.beforeEach((to, from, next) => {
+router.beforeEach((to) => {
   const authStore = useAuthStore();
   if (to.meta.requiresAuth && !authStore.isAuthenticated) {
-    next('/login');
-  } else if (authStore.isAuthenticated && (to.path === '/login' || to.path === '/register')) {
-    // Если уже залогинен, не пускаем на логин/регистрацию
-    next('/');
-  } else {
-    next();
+    return '/login';
   }
+  if (authStore.isAuthenticated && (to.path === '/login' || to.path === '/register')) {
+    return '/';
+  }
+  return true;
 });
 
 export default router;
