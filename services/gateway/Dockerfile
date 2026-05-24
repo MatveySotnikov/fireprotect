@@ -5,6 +5,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY gen/calculatorpb/ ./gen/calculatorpb/
+COPY gen/pdfpb/ ./gen/pdfpb/
 COPY services/gateway/ ./services/gateway/
 
 RUN CGO_ENABLED=0 GOOS=linux go build -o /gateway ./services/gateway/cmd/main.go
