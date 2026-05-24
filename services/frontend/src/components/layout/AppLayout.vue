@@ -11,20 +11,20 @@
               FireProtect
             </router-link>
             <router-link
-              to="/"
-              class="inline-flex items-center gap-1 px-1 pt-1 text-sm font-medium text-gray-700 hover:text-indigo-600 border-b-2 border-transparent hover:border-indigo-600 transition"
-              active-class="border-indigo-600 text-indigo-600"
-            >
-              <Calculator class="h-4 w-4" />
-              Калькулятор
+                to="/"
+                class="inline-flex items-center gap-1 px-1 pt-1 text-sm font-medium text-gray-700 hover:text-indigo-600 border-b-2 border-transparent hover:border-indigo-600 transition"
+                exact-active-class="border-indigo-600 text-indigo-600"
+                >
+                <Calculator class="h-4 w-4" />
+                Калькулятор
             </router-link>
             <router-link
-              to="/history"
-              class="inline-flex items-center gap-1 px-1 pt-1 text-sm font-medium text-gray-700 hover:text-indigo-600 border-b-2 border-transparent hover:border-indigo-600 transition"
-              active-class="border-indigo-600 text-indigo-600"
-            >
-              <History class="h-4 w-4" />
-              История
+                to="/history"
+                class="inline-flex items-center gap-1 px-1 pt-1 text-sm font-medium text-gray-700 hover:text-indigo-600 border-b-2 border-transparent hover:border-indigo-600 transition"
+                exact-active-class="border-indigo-600 text-indigo-600"
+                >
+                <History class="h-4 w-4" />
+                История
             </router-link>
           </div>
 
