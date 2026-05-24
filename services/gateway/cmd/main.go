@@ -8,6 +8,7 @@ import (
 	"github.com/MatveySotnikov/fireprotect/services/gateway/internal/db"
 	"github.com/MatveySotnikov/fireprotect/services/gateway/internal/grpcclient"
 	"github.com/MatveySotnikov/fireprotect/services/gateway/internal/handler"
+	"github.com/MatveySotnikov/fireprotect/services/gateway/internal/middleware"
 
 	"github.com/joho/godotenv"
 )
@@ -24,12 +25,15 @@ func main() {
 
 	grpcclient.Init()
 
-	http.HandleFunc("/auth/register", handler.Register)
-	http.HandleFunc("/auth/login", handler.Login)
-	http.HandleFunc("/calc", auth.AuthMiddleware(handler.Calc))
-	http.HandleFunc("/calculations/", auth.AuthMiddleware(handler.Calculations))
-	http.HandleFunc("/materials", handler.Materials)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/auth/register", handler.Register)
+	mux.HandleFunc("/auth/login", handler.Login)
+	mux.HandleFunc("/calc", auth.AuthMiddleware(handler.Calc))
+	mux.HandleFunc("/calculations/", auth.AuthMiddleware(handler.Calculations))
+	mux.HandleFunc("/materials", handler.Materials)
+
+	corsHandler := middleware.CORS(mux)
 
 	log.Println("Gateway HTTP server listening on :8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	log.Fatal(http.ListenAndServe(":8080", corsHandler))
 }
