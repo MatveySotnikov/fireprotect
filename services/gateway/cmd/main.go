@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	pb "github.com/MatveySotnikov/fireprotect/gen/calculatorpb"
@@ -16,6 +18,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/joho/godotenv"
+
+	"github.com/MatveySotnikov/fireprotect/services/gateway/internal/pdf"
 )
 
 var grpcClient pb.CalcServiceClient
@@ -76,7 +80,6 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Проверка на существующий email
 	var existing db.User
 	if result := db.DB.Where("email = ?", req.Email).First(&existing); result.Error == nil {
 		http.Error(w, "Email already registered", http.StatusConflict)
@@ -175,8 +178,23 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Пока не сохраняем в БД (будет на шаге 6), просто выводим userID в логи
-	log.Printf("User %d (email: %s) requested calculation", claims.UserID, claims.Email)
+	// Сохранение в БД
+	calc := db.Calculation{
+		UserID:        claims.UserID,
+		Area:          req.Area,
+		NormativeRate: req.NormativeRate,
+		Layers:        req.Layers,
+		SlopeAngle:    req.SlopeAngle,
+		LossFactor:    req.LossFactor,
+		Density:       1.2, // используется в Calculator, временно константа
+		TotalMass:     resp.GetTotalMass(),
+		TotalVolume:   resp.GetTotalVolume(),
+	}
+	if err := db.DB.Create(&calc).Error; err != nil {
+		log.Printf("Failed to save calculation: %v", err)
+	} else {
+		log.Printf("Calculation saved with ID %d for user %d", calc.ID, claims.UserID)
+	}
 
 	jsonResp := calcResponse{
 		TotalMass:   resp.GetTotalMass(),
@@ -187,22 +205,173 @@ func calcHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(jsonResp)
 }
 
+// Обработчик истории расчётов
+func calculationsHandler(w http.ResponseWriter, r *http.Request) {
+	claims, ok := auth.GetUserFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	path := strings.TrimPrefix(r.URL.Path, "/calculations")
+	path = strings.TrimSuffix(path, "/")
+
+	// GET /calculations — список
+	if path == "" {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var calcs []db.Calculation
+		db.DB.Where("user_id = ?", claims.UserID).Order("created_at desc").Find(&calcs)
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(calcs)
+		return
+	}
+
+	// Дальше путь вида /{id} или /{id}/download
+	parts := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	if len(parts) == 0 {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+
+	idStr := parts[0]
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "Invalid calculation ID", http.StatusBadRequest)
+		return
+	}
+
+	// GET /calculations/{id}/download
+	if len(parts) == 2 && parts[1] == "download" {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		// Загружаем расчёт с пользователем
+		var calc db.Calculation
+		if result := db.DB.Preload("User").Where("id = ? AND user_id = ?", id, claims.UserID).First(&calc); result.Error != nil {
+			http.Error(w, "Calculation not found", http.StatusNotFound)
+			return
+		}
+		data := pdf.ActData{
+			UserName:      calc.User.Name,
+			UserEmail:     calc.User.Email,
+			Area:          calc.Area,
+			NormativeRate: calc.NormativeRate,
+			Layers:        calc.Layers,
+			SlopeAngle:    calc.SlopeAngle,
+			LossFactor:    calc.LossFactor,
+			Density:       calc.Density,
+			TotalMass:     calc.TotalMass,
+			TotalVolume:   calc.TotalVolume,
+			CalcDate:      calc.CreatedAt,
+		}
+		pdfBytes, err := pdf.GenerateAct(data)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("PDF generation error: %v", err), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/pdf")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=act_%d.pdf", calc.ID))
+		w.WriteHeader(http.StatusOK)
+		w.Write(pdfBytes)
+		return
+	}
+
+	// GET /calculations/{id}
+	if len(parts) == 1 {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		var calc db.Calculation
+		if result := db.DB.Where("id = ? AND user_id = ?", id, claims.UserID).First(&calc); result.Error != nil {
+			http.Error(w, "Calculation not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(calc)
+		return
+	}
+
+	http.Error(w, "Not found", http.StatusNotFound)
+}
+
+func calcDownloadHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	claims, ok := auth.GetUserFromContext(r.Context())
+	if !ok {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Извлекаем ID из пути: /calculations/{id}/download
+	path := strings.TrimPrefix(r.URL.Path, "/calculations/")
+	parts := strings.Split(path, "/")
+	if len(parts) < 2 || parts[1] != "download" {
+		http.Error(w, "Invalid path", http.StatusBadRequest)
+		return
+	}
+	id, err := strconv.Atoi(parts[0])
+	if err != nil {
+		http.Error(w, "Invalid calculation ID", http.StatusBadRequest)
+		return
+	}
+
+	// Загружаем расчёт вместе с пользователем
+	var calc db.Calculation
+	if result := db.DB.Preload("User").Where("id = ? AND user_id = ?", id, claims.UserID).First(&calc); result.Error != nil {
+		http.Error(w, "Calculation not found", http.StatusNotFound)
+		return
+	}
+
+	data := pdf.ActData{
+		UserName:      calc.User.Name,
+		UserEmail:     calc.User.Email,
+		Area:          calc.Area,
+		NormativeRate: calc.NormativeRate,
+		Layers:        calc.Layers,
+		SlopeAngle:    calc.SlopeAngle,
+		LossFactor:    calc.LossFactor,
+		Density:       calc.Density,
+		TotalMass:     calc.TotalMass,
+		TotalVolume:   calc.TotalVolume,
+		CalcDate:      calc.CreatedAt,
+	}
+
+	pdfBytes, err := pdf.GenerateAct(data)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("PDF generation error: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/pdf")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=act_%d.pdf", calc.ID))
+	w.WriteHeader(http.StatusOK)
+	w.Write(pdfBytes)
+}
+
 func main() {
-	// Загружаем .env
 	if err := godotenv.Load(); err != nil {
 		log.Println("Warning: .env file not found, using system environment variables")
 	}
 
-	// Подключаем БД
 	if err := db.Init(); err != nil {
 		log.Fatalf("Database initialization failed: %v", err)
 	}
 	log.Println("Database connected and migrated")
 
+	// Маршруты
 	http.HandleFunc("/auth/register", registerHandler)
 	http.HandleFunc("/auth/login", loginHandler)
-	http.HandleFunc("/calc", auth.AuthMiddleware(calcHandler)) // защищён
-
+	http.HandleFunc("/calc", auth.AuthMiddleware(calcHandler))
+	http.HandleFunc("/calculations/", auth.AuthMiddleware(calculationsHandler))
 	log.Println("Gateway HTTP server listening on :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))
 }
