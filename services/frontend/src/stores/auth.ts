@@ -1,11 +1,10 @@
 import { defineStore } from 'pinia';
 import { ref, computed } from 'vue';
 import * as authApi from '../api/auth';
-import type { User } from '../types';
 
 export const useAuthStore = defineStore('auth', () => {
   const token = ref<string | null>(localStorage.getItem('auth_token'));
-  const user = ref<User | null>(null);
+  const displayName = ref<string | null>(localStorage.getItem('display_name'));
 
   const isAuthenticated = computed(() => !!token.value);
 
@@ -18,24 +17,35 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
+  function setDisplayName(name: string | null) {
+    displayName.value = name;
+    if (name) {
+      localStorage.setItem('display_name', name);
+    } else {
+      localStorage.removeItem('display_name');
+    }
+  }
+
   async function login(email: string, password: string) {
     const response = await authApi.login({ email, password });
     setToken(response.token);
+    setDisplayName(email); // используем email для отображения
   }
 
   async function register(name: string, email: string, password: string) {
     const response = await authApi.register({ name, email, password });
+    setDisplayName(name);
     return response;
   }
 
   function logout() {
     setToken(null);
-    user.value = null;
+    setDisplayName(null);
   }
 
   return {
     token,
-    user,
+    displayName,
     isAuthenticated,
     login,
     register,
